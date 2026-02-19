@@ -441,6 +441,8 @@ impl<'tcx> CodegenCx<'tcx> {
     ) {
         let attrs = AggregatedSpirvAttributes::parse(self, self.tcx.hir_attrs(hir_param.hir_id));
 
+        let attrs = attrs;
+
         let EntryParamDeducedFromRustRefOrValue {
             value_layout,
             storage_class,
@@ -786,7 +788,15 @@ impl<'tcx> CodegenCx<'tcx> {
 
         // Emit `OpDecorate`s based on attributes.
         let mut decoration_supersedes_location = false;
-        if let Some(builtin) = attrs.builtin {
+
+        let builtin: Option<Spanned<BuiltIn>> = attrs.builtin.or_else(|| {
+            let Some(adt) = entry_arg_abi.layout.ty.ty_adt_def() else { return None; };
+            let attrs = AggregatedSpirvAttributes::parse(
+                self, self.tcx.get_attrs_unchecked(adt.did()));
+            attrs.builtin_wrapper
+        });
+
+        if let Some(builtin) = builtin {
             if let Err(SpecConstant { .. }) = storage_class {
                 self.tcx.dcx().span_fatal(
                     builtin.span,

@@ -85,6 +85,7 @@ pub enum SpirvAttribute {
     // `struct` attributes:
     IntrinsicType(IntrinsicType),
     Block,
+    BuiltinWrapper(BuiltIn),
 
     // `fn` attributes:
     Entry(Entry),
@@ -122,6 +123,7 @@ pub struct AggregatedSpirvAttributes {
     // `struct` attributes:
     pub intrinsic_type: Option<Spanned<IntrinsicType>>,
     pub block: Option<Spanned<()>>,
+    pub builtin_wrapper: Option<Spanned<BuiltIn>>,
 
     // `fn` attributes:
     pub entry: Option<Spanned<Entry>>,
@@ -202,6 +204,9 @@ impl AggregatedSpirvAttributes {
 
         use SpirvAttribute::*;
         match attr {
+            BuiltinWrapper(value) => {
+                try_insert(&mut self.builtin_wrapper, value, span, "builtin wrapper")
+            }
             IntrinsicType(value) => {
                 try_insert(&mut self.intrinsic_type, value, span, "intrinsic type")
             }
@@ -301,6 +306,11 @@ impl CheckSpirvAttrVisitor<'_> {
             struct Expected<T>(T);
 
             let valid_target = match parsed_attr {
+                SpirvAttribute::BuiltinWrapper(_) => {
+                    // TODO: Validate stuff.
+                    Ok(())
+                },
+
                 SpirvAttribute::IntrinsicType(_) | SpirvAttribute::Block => match target {
                     Target::Struct => {
                         // FIXME(eddyb) further check type attribute validity,
@@ -612,6 +622,8 @@ fn parse_spirv_attr<'a>(
                 SpirvAttribute::InputAttachmentIndex(parse_attr_int_value(arg)?)
             } else if arg.has_name(sym.spec_constant) {
                 SpirvAttribute::SpecConstant(parse_spec_constant_attr(sym, arg)?)
+            } else if arg.has_name(sym.builtin_wrapper) {
+                SpirvAttribute::BuiltinWrapper(parse_builtin_wrapper_attr(sym, arg)?)
             } else {
                 let name = match arg.ident() {
                     Some(i) => i,
@@ -637,6 +649,26 @@ fn parse_spirv_attr<'a>(
         Ok((span, parsed_attr))
     })
     .collect()
+}
+
+fn parse_builtin_wrapper_attr(
+    sym: &Symbols,
+    arg: &MetaItemInner,
+) -> Result<BuiltIn, ParseAttrError> {
+    let Some((_name, lit)) = arg.singleton_lit_list() else {
+        return Err((arg.span(), "builtin_wrapper arg not literal; \
+                                 try builtin_wrapper(\"foo\")".into()));
+    };
+    let Some(lit_str) = lit.value_str() else {
+        return Err((arg.span(), "builtin_wrapper arg not string literal".into()));
+    };
+
+    let Some(SpirvAttribute::Builtin(builtin)) = sym.attributes.get(&lit_str) else
+    {
+        return Err((arg.span(), "builtin_wrapper arg string is not a known builtin".into()));
+    };
+
+    Ok(*builtin)
 }
 
 fn parse_spec_constant_attr(

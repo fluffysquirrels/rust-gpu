@@ -5,7 +5,7 @@ use crate::attr::{AggregatedSpirvAttributes, IntrinsicType};
 use crate::codegen_cx::CodegenCx;
 use crate::spirv_type::SpirvType;
 use itertools::Itertools;
-use rspirv::spirv::{Dim, ImageFormat, StorageClass, Word};
+use rspirv::spirv::{BuiltIn, Dim, ImageFormat, StorageClass, Word};
 use rustc_abi::ExternAbi as Abi;
 use rustc_abi::{
     Align, BackendRepr, FieldIdx, FieldsShape, Primitive, Scalar, Size, VariantIdx, Variants,
@@ -287,6 +287,11 @@ impl<'tcx> ConvSpirvType<'tcx> for TyAndLayout<'tcx> {
             }
 
             let attrs = AggregatedSpirvAttributes::parse(cx, cx.tcx.get_attrs_unchecked(adt.did()));
+
+            if let Some(builtin) = attrs.builtin_wrapper.map(|attr| attr.value) {
+                // TODO: Is there a better way to signal error?
+                return trans_builtin_wrapper_struct(cx, span, adt, builtin).unwrap_or(0);
+            }
 
             if let Some(intrinsic_type_attr) = attrs.intrinsic_type.map(|attr| attr.value)
                 && let Ok(spirv_type) =
@@ -1085,5 +1090,34 @@ fn trans_glam_like_struct<'tcx>(
         Err(tcx
             .dcx()
             .span_err(span, format!("{err_attr_name} type must be a struct")))
+    }
+}
+
+fn trans_builtin_wrapper_struct<'tcx>(
+    cx: &CodegenCx<'tcx>,
+    span: Span,
+    _adt: rustc_middle::ty::AdtDef<'tcx>,
+    builtin: BuiltIn,
+) -> Result<Word, ErrorGuaranteed> {
+    match builtin {
+        rspirv::spirv::BuiltIn::LocalInvocationIndex =>
+            // u32
+            return Ok(SpirvType::Integer(32, false).def(span, cx)),
+        rspirv::spirv::BuiltIn::LocalInvocationId => {
+            // [u32; 3]
+            let elem_spirv = SpirvType::Integer(32, false).def(span, cx);
+            let uvec3_spirv = SpirvType::Vector {
+                element: elem_spirv,
+                count: 3,
+                size: 3 * Size::from_bytes(std::mem::size_of::<u32>()),
+                align: Align::from_bytes(4).unwrap(),
+            }
+            .def(span, cx);
+            return Ok(uvec3_spirv);
+        },
+        _ => {
+            return Err(cx.tcx.dcx()
+                         .err(format!("builtin {:?} not supported yet", builtin)));
+        },
     }
 }

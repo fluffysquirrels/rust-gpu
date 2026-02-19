@@ -20,6 +20,7 @@ pub struct Symbols {
     pub libm: Symbol,
     pub entry_point_name: Symbol,
     pub spv_khr_vulkan_memory_model: Symbol,
+    pub builtin_wrapper: Symbol,
 
     pub descriptor_set: Symbol,
     pub binding: Symbol,
@@ -418,6 +419,7 @@ impl Symbols {
             libm: Symbol::intern("libm"),
             entry_point_name: Symbol::intern("entry_point_name"),
             spv_khr_vulkan_memory_model: Symbol::intern("SPV_KHR_vulkan_memory_model"),
+            builtin_wrapper: Symbol::intern("builtin_wrapper"),
 
             descriptor_set: Symbol::intern("descriptor_set"),
             binding: Symbol::intern("binding"),
