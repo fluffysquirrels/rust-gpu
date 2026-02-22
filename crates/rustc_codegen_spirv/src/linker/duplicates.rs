@@ -200,7 +200,6 @@ fn remove_duplicate_debug_names(debug_names: &mut Vec<Instruction>) {
                     inst.operands[1].unwrap_literal_bit32(),
                 )))
     });
-
 }
 
 pub fn remove_duplicate_types(module: &mut Module) {
@@ -553,20 +552,21 @@ pub fn remove_duplicate_debuginfo(module: &mut Module) {
     }
 }
 
-
 pub fn remove_duplicate_builtin_input_variables(module: &mut Module) {
     // Find the variables decorated as input builtins, and any duplicates of them..
 
     // Build a map: from a variable ID to the builtin it's decorated with.
-    let var_id_to_builtin: FxHashMap::<Word, BuiltIn>;
+    let var_id_to_builtin: FxHashMap<Word, BuiltIn>;
     {
         let mut var_id_to_builtin_mut = FxHashMap::default();
 
         for inst in module.annotations.iter() {
             if inst.class.opcode == Op::Decorate
-                && let [Operand::IdRef(var_id),
-                        Operand::Decoration(Decoration::BuiltIn),
-                        Operand::BuiltIn(builtin)] = inst.operands[..]
+                && let [
+                    Operand::IdRef(var_id),
+                    Operand::Decoration(Decoration::BuiltIn),
+                    Operand::BuiltIn(builtin),
+                ] = inst.operands[..]
             {
                 // Ignore multiple BuiltIn's for one variable ID;
                 // they're invalid AFAIK, but later validation will catch them.
@@ -578,7 +578,7 @@ pub fn remove_duplicate_builtin_input_variables(module: &mut Module) {
     };
 
     // Build a map from deleted duplicate input variable ID to the de-duplicated ID.
-    let duplicate_vars: FxHashMap::<Word, Word>;
+    let duplicate_vars: FxHashMap<Word, Word>;
     {
         let mut duplicate_in_vars_mut = FxHashMap::<Word, Word>::default();
 
@@ -596,13 +596,13 @@ pub fn remove_duplicate_builtin_input_variables(module: &mut Module) {
                     // record it in the builtins map.
                     hash_map::Entry::Vacant(vacant) => {
                         vacant.insert(var_id);
-                    },
+                    }
 
                     // this builtin already has an input variable,
                     // record it in the duplicates map.
                     hash_map::Entry::Occupied(occupied) => {
                         duplicate_in_vars_mut.insert(var_id, *occupied.get());
-                    },
+                    }
                 };
             }
         }
@@ -616,10 +616,10 @@ pub fn remove_duplicate_builtin_input_variables(module: &mut Module) {
             continue;
         }
 
-        entry.operands.retain(
-            |operand|
+        entry.operands.retain(|operand| {
             !matches!(operand,
-                      Operand::IdRef(id) if duplicate_vars.contains_key(&id)));
+                      Operand::IdRef(id) if duplicate_vars.contains_key(&id))
+        });
     }
 
     // Remove duplicate debug names after merging variables.
@@ -642,14 +642,16 @@ pub fn remove_duplicate_builtin_input_variables(module: &mut Module) {
     }
 
     // Remove the duplicate variable definitions.
-    module.types_global_values
-          .retain(|inst| !matches!(inst.result_id,
-                                   Some(id) if duplicate_vars.contains_key(&id)));
+    module
+        .types_global_values
+        .retain(|inst| !matches!(inst.result_id, Some(id) if duplicate_vars.contains_key(&id)));
 
     // Rewrite function blocks to use de-duplicated variables.
-    for inst in &mut module.functions.iter_mut()
-                           .flat_map(|f| &mut f.blocks)
-                           .flat_map(|b| &mut b.instructions)
+    for inst in &mut module
+        .functions
+        .iter_mut()
+        .flat_map(|f| &mut f.blocks)
+        .flat_map(|b| &mut b.instructions)
     {
         rewrite_inst_with_rules(inst, &duplicate_vars);
     }

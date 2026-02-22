@@ -5,7 +5,6 @@
 //! * [SPIR-V specification for builtins](https://registry.khronos.org/SPIR-V/specs/unified1/SPIRV.html#_builtin)
 //! * [GLSL 4.x reference](https://registry.khronos.org/OpenGL-Refpages/gl4/)
 
-
 #[cfg(target_arch = "spirv")]
 macro_rules! load_builtin {
     ($ty:ty, $name:ident) => {
@@ -22,7 +21,6 @@ macro_rules! load_builtin {
         }
     };
 }
-
 
 /// Compute shader built-ins
 pub mod compute {
