@@ -1,9 +1,13 @@
+use crate::maybe_pqp_cg_ssa::traits::ConstCodegenMethods;
 // HACK(eddyb) avoids rewriting all of the imports (see `lib.rs` and `build.rs`).
 use crate::maybe_pqp_cg_ssa as rustc_codegen_ssa;
 
 use super::CodegenCx;
+
+use arrayvec::ArrayVec;
 use crate::abi::ConvSpirvType;
-use crate::attr::{AggregatedSpirvAttributes, Entry, Spanned, SpecConstant};
+use crate::attr::{AggregatedSpirvAttributes, Entry, ExecutionModeExtra, IdSource,
+                  Spanned, SpecConstant};
 use crate::builder::Builder;
 use crate::builder_spirv::{SpirvFunctionCursor, SpirvValue, SpirvValueExt};
 use crate::spirv_type::SpirvType;
@@ -136,7 +140,24 @@ impl<'tcx> CodegenCx<'tcx> {
             .execution_modes
             .iter()
             .for_each(|(execution_mode, execution_mode_extra)| {
-                emit.execution_mode(stub.id, *execution_mode, execution_mode_extra);
+                // fluffy: for const workgroup size (#299),
+                //         use execution_mode_id if some params are result IDs
+                match execution_mode_extra {
+                    ExecutionModeExtra::Literal(literals) =>
+                        emit.execution_mode(stub.id, *execution_mode, literals),
+                    ExecutionModeExtra::Id(ids) => {
+                        let extra_ops: ArrayVec<Word, 3> = ids.iter().map(
+                            |id|
+                            match id {
+                                IdSource::ConstVar { def_id, .. } =>
+                                    self.get_static(*def_id).def_cx(self),
+                                IdSource::Literal(word) =>
+                                    self.const_u32(*word).def_cx(self),
+                            }
+                        ).collect();
+                        emit.execution_mode_id(stub.id, *execution_mode, &extra_ops);
+                    }
+                };
             });
     }
 

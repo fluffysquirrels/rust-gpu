@@ -2,12 +2,13 @@
 //!
 //! The attribute-checking parts of this try to follow `rustc_passes::check_attr`.
 
+use arrayvec::ArrayVec;
 use crate::codegen_cx::CodegenCx;
 use crate::symbols::Symbols;
-use rspirv::spirv::{BuiltIn, ExecutionMode, ExecutionModel, StorageClass};
+use rspirv::spirv::{BuiltIn, ExecutionMode, ExecutionModel, StorageClass, Word};
 use rustc_ast::{LitKind, MetaItemInner, MetaItemLit};
 use rustc_hir as hir;
-use rustc_hir::def_id::LocalModDefId;
+use rustc_hir::def_id::{DefId, LocalModDefId};
 use rustc_hir::intravisit::{self, Visitor};
 use rustc_hir::{Attribute, CRATE_HIR_ID, HirId, MethodKind, Target};
 use rustc_middle::hir::nested_filter;
@@ -18,25 +19,29 @@ use smallvec::SmallVec;
 use std::rc::Rc;
 
 // FIXME(eddyb) replace with `ArrayVec<[Word; 3]>`.
-#[derive(Copy, Clone, Debug)]
-pub struct ExecutionModeExtra {
-    args: [u32; 3],
-    len: u8,
+// fluffy: for const workgroup size (#299), support literal or OpConst result id for each field
+#[derive(Clone, Debug)]
+pub enum ExecutionModeExtra {
+    Literal(ArrayVec<Word, 3>),
+    Id(ArrayVec<IdSource, 3>),
+}
+
+#[derive(Clone, Debug)]
+pub enum IdSource {
+    Literal(Word),
+    // TODO: Hopefully keep just def_id
+    ConstVar { path: rustc_ast::ast::Path, def_id: DefId },
 }
 
 impl ExecutionModeExtra {
-    pub(crate) fn new(args: impl AsRef<[u32]>) -> Self {
-        let _args = args.as_ref();
-        let mut args = [0; 3];
-        args[.._args.len()].copy_from_slice(_args);
-        let len = _args.len() as u8;
-        Self { args, len }
+    pub(crate) fn new_literal(args: impl AsRef<[Word]>) -> Self {
+        let as_vec = ArrayVec::<Word, 3>::from_iter(args.as_ref().iter().copied());
+        Self::Literal(as_vec)
     }
-}
 
-impl AsRef<[u32]> for ExecutionModeExtra {
-    fn as_ref(&self) -> &[u32] {
-        &self.args[..self.len as _]
+    pub(crate) fn new_id(args: impl AsRef<[IdSource]>) -> Self {
+        let as_vec = ArrayVec::<IdSource, 3>::from_iter(args.as_ref().iter().cloned());
+        Self::Id(as_vec)
     }
 }
 
@@ -687,24 +692,45 @@ fn parse_attr_int_value(arg: &MetaItemInner) -> Result<u32, ParseAttrError> {
     }
 }
 
-fn parse_local_size_attr(arg: &MetaItemInner) -> Result<[u32; 3], ParseAttrError> {
+// fluffy: modify here for const workgroup size (#299)
+fn parse_local_size_attr(arg: &MetaItemInner) -> Result<ExecutionModeExtra, ParseAttrError> {
+// fn parse_local_size_attr(arg: &MetaItemInner) -> Result<[u32; 3], ParseAttrError> {
     let arg = match arg.meta_item() {
         Some(arg) => arg,
         None => return Err((arg.span(), "attribute must have value".to_string())),
     };
     match arg.meta_item_list() {
-        Some(tuple) if !tuple.is_empty() && tuple.len() < 4 => {
-            let mut local_size = [1; 3];
+        Some(tuple) if !tuple.is_empty() && tuple.len() <= 3 => {
+            let one = IdSource::Literal(1);
+            let mut local_size: [IdSource; 3] = [one.clone(), one.clone(), one];
             for (idx, lit) in tuple.iter().enumerate() {
                 match lit {
-                    MetaItemInner::Lit(MetaItemLit {
-                                           kind: LitKind::Int(x, ..),
-                                           ..
-                                       }) if *x <= u32::MAX as u128 => local_size[idx] = x.get() as u32,
-                    _ => return Err((lit.span(), "must be a u32 literal".to_string())),
+                    MetaItemInner::Lit(
+                        MetaItemLit {
+                            kind: LitKind::Int(x, ..),
+                            ..
+                        }) if *x <= u32::MAX as u128 =>
+                        local_size[idx] = IdSource::Literal(x.get() as u32),
+                    MetaItemInner::MetaItem(item) if item.is_word() => {
+                        let const_path: &rustc_ast::ast::Path = &item.path;
+                        let def_id: DefId = todo!("fluffy: lookup from TyCtxt?");
+                        local_size[idx] = IdSource::ConstVar {
+                            def_id,
+                            path: const_path.clone()
+                        };
+                    },
+                    _ => return Err((lit.span(), "must be a u32 literal or a u32 const".to_string())),
                 }
             }
-            Ok(local_size)
+            if local_size.iter().all(|operand| matches!(operand, IdSource::Literal(_))) {
+                let literals = local_size.into_iter().map(|op| match op {
+                    IdSource::Literal(word) => word,
+                    IdSource::ConstVar { .. } => unreachable!("all values are literals"),
+                }).collect();
+                Ok(ExecutionModeExtra::Literal(literals))
+            } else {
+                Ok(ExecutionModeExtra::Id(ArrayVec::from(local_size)))
+            }
         }
         Some([]) => Err((
             arg.span,
@@ -735,7 +761,7 @@ fn parse_entry_attrs(
     use ExecutionModel::*;
     let mut entry = Entry::from(execution_model);
     let mut origin_mode: Option<ExecutionMode> = None;
-    let mut local_size: Option<[u32; 3]> = None;
+    let mut local_size: Option<ExecutionModeExtra> = None;
     let mut local_size_hint: Option<[u32; 3]> = None;
     // Reserved
     //let mut max_workgroup_size_intel: Option<[u32; 3]> = None;
@@ -809,11 +835,11 @@ fn parse_entry_attrs(
                             if let Some(val) = val {
                                 entry
                                     .execution_modes
-                                    .push((*execution_mode, ExecutionModeExtra::new([val])));
+                                    .push((*execution_mode, ExecutionModeExtra::new_literal([val])));
                             } else {
                                 entry
                                     .execution_modes
-                                    .push((*execution_mode, ExecutionModeExtra::new([])));
+                                    .push((*execution_mode, ExecutionModeExtra::new_literal([])));
                             }
                         }
                     }
@@ -850,13 +876,18 @@ fn parse_entry_attrs(
             let origin_mode = origin_mode.unwrap_or(OriginUpperLeft);
             entry
                 .execution_modes
-                .push((origin_mode, ExecutionModeExtra::new([])));
+                .push((origin_mode, ExecutionModeExtra::new_literal([])));
         }
         GLCompute | MeshNV | TaskNV | TaskEXT | MeshEXT => {
+            // fluffy TODO #299: Parse and store const names also.
             if let Some(local_size) = local_size {
+                let mode = match local_size {
+                    ExecutionModeExtra::Id(_) => LocalSizeId,
+                    ExecutionModeExtra::Literal(_) => LocalSize,
+                };
                 entry
                     .execution_modes
-                    .push((LocalSize, ExecutionModeExtra::new(local_size)));
+                    .push((mode, local_size));
             } else {
                 return Err((
                     arg.span(),
