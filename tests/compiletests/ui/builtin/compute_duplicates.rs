@@ -5,8 +5,15 @@
 // normalize-stderr-test "OpLine .*\n" -> ""
 // normalize-stderr-test "%\d+ = OpString .*\n" -> ""
 // normalize-stderr-test "OpCapability VulkanMemoryModel\n" -> ""
+// normalize-stderr-test "OpExtension .SPV_KHR_vulkan_memory_model.\n" -> ""
 // normalize-stderr-test "OpMemoryModel Logical Vulkan" -> "OpMemoryModel Logical Simple"
 // normalize-stderr-test "; .*\n" -> ""
+
+// ignore-spv1.0
+// ignore-spv1.1
+// ignore-spv1.2
+// ignore-vulkan1.0
+// ignore-vulkan1.1
 
 use spirv_std::{
     builtin::compute,
